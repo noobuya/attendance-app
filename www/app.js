@@ -264,6 +264,182 @@ function exportCsv() {
   saveFile(`출결표_${ui.from}_${ui.to}.csv`, csv, 'text/csv');
 }
 
+// ---------- 이미지로 공유 ----------
+const FONT = () => getComputedStyle(document.body).fontFamily;
+const rangeLabel = () => {
+  const f = parse(ui.from), t = parse(ui.to);
+  const fmt = d => `${d.getFullYear()}.${d.getMonth() + 1}.${d.getDate()}(${WEEK[d.getDay()]})`;
+  return ui.from === ui.to ? fmt(f) : `${fmt(f)} ~ ${fmt(t)}`;
+};
+const viewGroupLabel = () => ui.viewGroup === 'all' ? '전체' : groupName(ui.viewGroup);
+
+function newImage(w, h) {
+  const c = document.createElement('canvas');
+  const scale = 2;
+  c.width = w * scale; c.height = h * scale;
+  const g = c.getContext('2d');
+  g.scale(scale, scale);
+  g.fillStyle = '#ffffff';
+  g.fillRect(0, 0, w, h);
+  g.textBaseline = 'middle';
+  return { c, g };
+}
+function text(g, str, x, y, { size = 13, weight = 400, color = '#1c2230', align = 'left' } = {}) {
+  g.font = `${weight} ${size}px ${FONT()}`;
+  g.fillStyle = color;
+  g.textAlign = align;
+  g.fillText(str, x, y);
+}
+function drawHeader(g, w, title) {
+  g.fillStyle = '#2563eb';
+  g.fillRect(0, 0, w, 64);
+  text(g, title, 16, 24, { size: 18, weight: 700, color: '#fff' });
+  text(g, `${rangeLabel()} · ${viewGroupLabel()}`, 16, 47, { size: 13, color: '#dbe6ff' });
+}
+
+function tableImage() {
+  const { days, people, perPerson } = aggregate();
+  const nameW = 76, cellW = 30, rowH = 30, headH = 40, sumW = 34, rateW = 56, pad = 16;
+  const sumCols = STATUSES.length;
+  const w = Math.max(360, pad * 2 + nameW + days.length * cellW + sumCols * sumW + rateW);
+  const tableTop = 64 + 14;
+  const h = tableTop + headH + people.length * rowH + 56;
+  const { c, g } = newImage(w, h);
+  drawHeader(g, w, '출결표');
+
+  let x = pad, y = tableTop;
+  g.fillStyle = '#e7eefe';
+  g.fillRect(pad, y, w - pad * 2, headH);
+  text(g, '이름', x + 8, y + headH / 2, { size: 12, weight: 700 });
+  x += nameW;
+  for (const d of days) {
+    const wd = parse(d).getDay();
+    const col = wd === 0 ? '#ef4444' : wd === 6 ? '#2563eb' : '#1c2230';
+    text(g, shortDate(d), x + cellW / 2, y + 13, { size: 10, weight: 600, color: col, align: 'center' });
+    text(g, WEEK[wd], x + cellW / 2, y + 28, { size: 10, color: col, align: 'center' });
+    x += cellW;
+  }
+  for (const s of STATUSES) {
+    text(g, s.label, x + sumW / 2, y + headH / 2, { size: 11, weight: 700, color: s.color, align: 'center' });
+    x += sumW;
+  }
+  text(g, '출석률', x + rateW / 2, y + headH / 2, { size: 11, weight: 700, align: 'center' });
+
+  y += headH;
+  let lastGroup = null;
+  for (const p of people) {
+    x = pad;
+    if (ui.viewGroup === 'all' && p.groupId !== lastGroup && lastGroup !== null) {
+      g.fillStyle = '#9aa3b5';
+      g.fillRect(pad, y - 1, w - pad * 2, 2);
+    }
+    lastGroup = p.groupId;
+    g.fillStyle = groupColor(p.groupId);
+    g.fillRect(x, y + 6, 3, rowH - 12);
+    text(g, p.name, x + 8, y + rowH / 2, { size: 13, weight: 600 });
+    x += nameW;
+    for (const d of days) {
+      const s = data.records[d]?.[p.id];
+      if (s) {
+        g.fillStyle = STATUS[s].color;
+        g.fillRect(x + 1, y + 1, cellW - 2, rowH - 2);
+        text(g, STATUS[s].short, x + cellW / 2, y + rowH / 2, { size: 12, weight: 700, color: '#fff', align: 'center' });
+      } else {
+        text(g, '·', x + cellW / 2, y + rowH / 2, { size: 12, color: '#b0b6c3', align: 'center' });
+      }
+      x += cellW;
+    }
+    const pp = perPerson.get(p.id);
+    for (const s of STATUSES) {
+      const n = pp[s.key] || 0;
+      text(g, String(n), x + sumW / 2, y + rowH / 2, { size: 12, weight: n ? 700 : 400, color: n ? '#1c2230' : '#b0b6c3', align: 'center' });
+      x += sumW;
+    }
+    const r = rate(pp.attended, pp.total);
+    text(g, r === null ? '-' : r + '%', x + rateW / 2, y + rowH / 2, { size: 12, weight: 700,
+      color: r === null ? '#b0b6c3' : r >= 90 ? '#16a34a' : r >= 70 ? '#d97706' : '#ef4444', align: 'center' });
+    g.fillStyle = '#e3e7ef';
+    g.fillRect(pad, y + rowH - 0.5, w - pad * 2, 1);
+    y += rowH;
+  }
+
+  // 범례
+  x = pad; y += 26;
+  for (const s of STATUSES) {
+    g.fillStyle = s.color;
+    g.fillRect(x, y - 6, 12, 12);
+    text(g, `${s.short}=${s.label}`, x + 16, y, { size: 11, color: '#6b7385' });
+    x += 70;
+  }
+  return c;
+}
+
+function statsImage() {
+  const { totals } = aggregate();
+  const total = Object.values(totals).reduce((a, b) => a + b, 0);
+  const w = 420, pad = 16, inner = w - pad * 2;
+  const blocks = [
+    ['상태별 비율', charts.pie],
+    ['날짜별 출석률', charts.line],
+    ['그룹별 출결', charts.group],
+    ['사람별 출석률', charts.person],
+  ].filter(([, ch]) => ch).map(([title, ch]) => ({ title, canvas: ch.canvas, h: inner * ch.canvas.height / ch.canvas.width }));
+  const h = 64 + 16 + 64 + blocks.reduce((a, b) => a + b.h + 44, 0) + 8;
+  const { c, g } = newImage(w, h);
+  drawHeader(g, w, '출결 통계');
+
+  let y = 80;
+  const kpis = [
+    [total ? rate(total - totals.A, total) + '%' : '-', '출석률', '#1c2230'],
+    [String(totals.L), '지각', STATUS.L.color],
+    [String(totals.A), '결석', STATUS.A.color],
+  ];
+  const kw = (inner - 16) / 3;
+  kpis.forEach(([v, label, col], i) => {
+    const x = pad + i * (kw + 8);
+    g.fillStyle = '#f4f6fa';
+    g.fillRect(x, y, kw, 56);
+    text(g, v, x + kw / 2, y + 22, { size: 20, weight: 700, color: col, align: 'center' });
+    text(g, label, x + kw / 2, y + 44, { size: 11, color: '#6b7385', align: 'center' });
+  });
+  y += 64 + 12;
+  for (const b of blocks) {
+    text(g, b.title, pad, y + 12, { size: 14, weight: 700 });
+    g.drawImage(b.canvas, pad, y + 28, inner, b.h);
+    y += b.h + 44;
+  }
+  return c;
+}
+
+async function shareImage(canvas, filename) {
+  const dataUrl = canvas.toDataURL('image/png');
+  const cap = window.Capacitor;
+  if (cap?.isNativePlatform?.()) {
+    try {
+      const { Filesystem, Share } = cap.Plugins;
+      const res = await Filesystem.writeFile({ path: filename, data: dataUrl.split(',')[1], directory: 'CACHE' });
+      await Share.share({ title: filename, files: [res.uri], dialogTitle: '이미지 보내기' });
+    } catch (e) {
+      if (!String(e?.message || e).toLowerCase().includes('cancel')) toast('이미지를 공유하지 못했습니다');
+    }
+    return;
+  }
+  const blob = await new Promise(r => canvas.toBlob(r, 'image/png'));
+  const file = new File([blob], filename, { type: 'image/png' });
+  if (navigator.canShare?.({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: filename }); }
+    catch (e) { if (e.name !== 'AbortError') toast('이미지를 공유하지 못했습니다'); }
+    return;
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  toast('이미지를 저장했습니다');
+}
+
 // ---------- 그래프 ----------
 function makeChart(key, canvas, config) {
   charts[key]?.destroy();
@@ -475,6 +651,11 @@ function init() {
 
   setupRangeControls();
   $('#exportCsv').onclick = exportCsv;
+  $('#shareTableImg').onclick = () => {
+    if (!peopleIn(ui.viewGroup).length) return toast('표시할 사람이 없습니다');
+    shareImage(tableImage(), `출결표_${ui.from}_${ui.to}.png`);
+  };
+  $('#shareStatsImg').onclick = () => shareImage(statsImage(), `출결통계_${ui.from}_${ui.to}.png`);
 
   $('#groupForm').onsubmit = e => {
     e.preventDefault();
