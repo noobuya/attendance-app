@@ -1,0 +1,46 @@
+name: 안드로이드 APK 빌드
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: android-actions/setup-android@v3
+      - run: npm ci
+      - run: npx cap sync android
+      - name: APK 빌드
+        working-directory: android
+        env:
+          VERSION_CODE: ${{ github.run_number }}
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+          cp app/build/outputs/apk/release/app-release.apk ../출결관리.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: attendance-apk
+          path: 출결관리.apk
+      - name: 최신 APK를 Releases에 올리기
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: 출결 관리 최신 버전
+          body: 휴대폰에서 아래 출결관리.apk 를 눌러 내려받아 설치하세요.
+          files: 출결관리.apk
+          make_latest: true

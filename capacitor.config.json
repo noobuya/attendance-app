@@ -1,0 +1,2 @@
+{ "appId": "com.noobuya.attendance", "appName": "출결 관리", "webDir": "www",
+  "android": { "backgroundColor": "#2563eb" } }

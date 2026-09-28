@@ -1,0 +1,3 @@
+{ "name": "출결 관리", "short_name": "출결", "start_url": "./", "display": "standalone",
+  "background_color": "#f4f6fa", "theme_color": "#2563eb",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }] }
