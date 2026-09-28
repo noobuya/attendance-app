@@ -1,3 +1,6 @@
-{ "name": "출결 관리", "short_name": "출결", "start_url": "./", "display": "standalone",
+{ "name": "출결 관리", "short_name": "출결", "start_url": "./", "scope": "./", "display": "standalone",
   "background_color": "#f4f6fa", "theme_color": "#2563eb",
-  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }] }
+  "icons": [
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "apple-touch-icon.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" } ] }
