@@ -69,8 +69,23 @@
   </section>
 
   <!-- 관리 -->
+  <!-- 공지사항 -->
+  <section id="tab-notice" class="tab">
+    <form id="noticeForm" class="card notice-form">
+      <h3>공지 올리기</h3>
+      <input id="noticeTitle" placeholder="제목" maxlength="60" required>
+      <textarea id="noticeBody" rows="4" placeholder="내용" maxlength="2000"></textarea>
+      <div class="inline-form">
+        <select id="noticeGroup"></select>
+        <button class="btn small">올리기</button>
+      </div>
+    </form>
+    <ul class="notice-list" id="noticeList"></ul>
+  </section>
+
   <section id="tab-manage" class="tab">
-    <div class="card">
+    <div class="card" id="connectCard" hidden></div>
+    <div class="card" id="groupCard">
       <h3>그룹</h3>
       <form id="groupForm" class="inline-form">
         <input id="groupName" placeholder="새 그룹 이름" maxlength="20" required>
@@ -87,14 +102,14 @@
       </form>
       <ul class="manage-list" id="personList"></ul>
     </div>
-    <div class="card">
+    <div class="card" id="dataCard">
       <h3>데이터</h3>
-      <p class="muted">기록은 이 폰 안에만 저장됩니다. 폰을 바꾸거나 앱을 지우기 전에 백업해 두세요.</p>
+      <p class="muted" id="dataNote"></p>
       <div class="row-actions">
         <button class="btn small" id="backupBtn">백업 파일 저장</button>
-        <label class="btn small ghost">백업 불러오기<input type="file" id="restoreInput" accept="application/json" hidden></label>
       </div>
-      <div class="row-actions">
+      <div class="row-actions" id="localDataActions">
+        <label class="btn small ghost">백업 불러오기<input type="file" id="restoreInput" accept="application/json" hidden></label>
         <button class="btn small ghost" id="sampleBtn">예시 데이터 넣기</button>
         <button class="btn small danger" id="resetBtn">전체 초기화</button>
       </div>
@@ -106,6 +121,7 @@
   <button data-tab="check" class="active"><span>✔</span>출결 입력</button>
   <button data-tab="table"><span>▦</span>출결표</button>
   <button data-tab="stats"><span>◔</span>그래프</button>
+  <button data-tab="notice" hidden><span>📢<i class="tab-badge" hidden></i></span>공지</button>
   <button data-tab="manage"><span>⚙</span>관리</button>
 </nav>
 
@@ -124,6 +140,11 @@
 <div id="toast"></div>
 
 <script src="vendor/chart.umd.js"></script>
+<script src="vendor/firebase-app-compat.js"></script>
+<script src="vendor/firebase-auth-compat.js"></script>
+<script src="vendor/firebase-firestore-compat.js"></script>
+<script src="firebase-config.js"></script>
+<script src="cloud.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

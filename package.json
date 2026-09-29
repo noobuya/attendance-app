@@ -16,7 +16,8 @@
     "@capacitor/core": "^6.2.2",
     "@capacitor/filesystem": "^6.0.4",
     "@capacitor/share": "^6.0.4",
-    "chart.js": "^4.5.1"
+    "chart.js": "^4.5.1",
+    "firebase": "^10.14.1"
   },
   "devDependencies": {
     "@capacitor/assets": "^3.0.5"

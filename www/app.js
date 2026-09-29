@@ -17,6 +17,7 @@ const GROUP_COLORS = ['#2563eb', '#db2777', '#059669', '#d97706', '#7c3aed', '#0
 const STORE_KEY = 'attendance-app-v1';
 const emptyData = () => ({ groups: [], people: [], records: {} });
 let data = load();
+const cloudOn = () => !!Cloud.session;
 
 function load() {
   try {
@@ -29,6 +30,7 @@ function load() {
   return emptyData();
 }
 function save() {
+  if (cloudOn()) return;
   try { localStorage.setItem(STORE_KEY, JSON.stringify(data)); }
   catch (e) { toast('저장 공간이 부족해 저장하지 못했습니다'); }
 }
@@ -83,7 +85,7 @@ function peopleIn(groupId) {
 }
 
 // ---------- 탭 ----------
-const TITLES = { check: '출결 입력', table: '출결표', stats: '그래프', manage: '관리' };
+const TITLES = { check: '출결 입력', table: '출결표', stats: '그래프', notice: '공지사항', manage: '관리' };
 function showTab(tab) {
   ui.tab = tab;
   $$('.tab').forEach(el => el.classList.toggle('active', el.id === 'tab-' + tab));
@@ -97,7 +99,9 @@ function render() {
   if (ui.tab === 'check') renderCheck();
   if (ui.tab === 'table') renderTable();
   if (ui.tab === 'stats') renderStats();
+  if (ui.tab === 'notice') renderNotices();
   if (ui.tab === 'manage') renderManage();
+  renderNoticeBadge();
 }
 
 function renderGroupChips(el, current, onPick) {
@@ -110,6 +114,7 @@ function renderGroupChips(el, current, onPick) {
 
 // ---------- 출결 입력 ----------
 function renderCheck() {
+  if (cloudOn()) Cloud.ensureLoaded(ui.checkDate);
   $('#checkDate').value = ui.checkDate;
   renderGroupChips($('#checkGroupChips'), ui.checkGroup, id => { ui.checkGroup = id; renderCheck(); });
 
@@ -152,6 +157,11 @@ function renderCheck() {
 }
 
 function setStatus(personId, s) {
+  if (cloudOn()) {
+    const person = data.people.find(p => p.id === personId);
+    const cur = data.records[ui.checkDate]?.[personId];
+    return Cloud.setMarks(ui.checkDate, [{ person, status: cur === s ? null : s }]);
+  }
   const day = data.records[ui.checkDate] || (data.records[ui.checkDate] = {});
   if (day[personId] === s) delete day[personId]; // 같은 버튼 다시 누르면 취소
   else day[personId] = s;
@@ -214,6 +224,7 @@ const rate = (att, total) => total ? Math.round(att / total * 1000) / 10 : null;
 
 // ---------- 출결표 ----------
 function renderTable() {
+  if (cloudOn()) Cloud.ensureLoaded(ui.from);
   syncRangeInputs();
   renderGroupChips($('#tableGroupChips'), ui.viewGroup, id => { ui.viewGroup = id; renderTable(); });
   $('#tableLegend').innerHTML = STATUSES.map(s => `<span><span class="dot" style="background:${s.color}"></span>${s.short}=${s.label}</span>`).join('');
@@ -447,6 +458,7 @@ function makeChart(key, canvas, config) {
 }
 
 function renderStats() {
+  if (cloudOn()) Cloud.ensureLoaded(ui.from);
   syncRangeInputs();
   renderGroupChips($('#statsGroupChips'), ui.viewGroup, id => { ui.viewGroup = id; renderStats(); });
   const { people, perPerson, totals, perDay } = aggregate();
@@ -521,27 +533,92 @@ function renderStats() {
   });
 }
 
+// ---------- 공지사항 ----------
+const APK_URL = 'https://github.com/noobuya/attendance-app/releases/download/latest/default.apk';
+const WEB_URL = 'https://noobuya.github.io/attendance-app/';
+const SEEN_KEY = 'attendance-notice-seen';
+const noticeTime = n => n.createdAt?.toMillis?.() ?? Date.now();
+const fmtDateTime = ms => { const d = new Date(ms); return `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+
+function renderNoticeBadge() {
+  const btn = $('.tabbar button[data-tab=notice]');
+  btn.hidden = !cloudOn();
+  let seen = 0;
+  try { seen = Number(localStorage.getItem(SEEN_KEY) || 0); } catch { /* 무시 */ }
+  const unread = cloudOn() && ui.tab !== 'notice' ? Cloud.state.notices.filter(n => noticeTime(n) > seen).length : 0;
+  const badge = btn.querySelector('.tab-badge');
+  badge.textContent = unread > 9 ? '9+' : unread;
+  badge.hidden = !unread;
+  $('.tabbar').style.gridTemplateColumns = `repeat(${cloudOn() ? 5 : 4}, 1fr)`;
+}
+
+function renderNotices() {
+  const admin = Cloud.isAdmin();
+  $('#noticeForm').hidden = !admin;
+  if (admin) {
+    const sel = $('#noticeGroup');
+    const keep = sel.value;
+    sel.innerHTML = '<option value="">모든 팀장에게</option>' + data.groups.map(g => `<option value="${g.id}">${esc(g.name)} 팀장에게만</option>`).join('');
+    sel.value = [...sel.options].some(o => o.value === keep) ? keep : '';
+  }
+  const list = Cloud.state.notices;
+  $('#noticeList').innerHTML = list.map(n => `
+    <li class="notice" data-id="${n.id}">
+      <div class="notice-head"><b>${esc(n.title)}</b><small>${fmtDateTime(noticeTime(n))}</small></div>
+      ${n.groupId ? `<span class="badge" style="background:${groupColor(n.groupId)}">${esc(groupName(n.groupId))}</span>` : ''}
+      <p>${esc(n.body).replace(/\n/g, '<br>')}</p>
+      ${admin ? '<button class="del">삭제</button>' : ''}
+    </li>`).join('') || '<li class="empty-state">아직 공지사항이 없습니다</li>';
+  $$('#noticeList .del').forEach(b => b.onclick = () => {
+    if (confirm('이 공지를 삭제할까요?')) Cloud.deleteNotice(b.closest('li').dataset.id);
+  });
+  const newest = list.length ? Math.max(...list.map(noticeTime)) : 0;
+  try { localStorage.setItem(SEEN_KEY, String(Math.max(newest, Date.now()))); } catch { /* 무시 */ }
+}
+
 // ---------- 관리 ----------
 function renderManage() {
+  const admin = !cloudOn() || Cloud.isAdmin();
+  const leader = cloudOn() && !Cloud.isAdmin();
+  renderConnect();
+
+  $('#groupCard').hidden = leader;
   const gl = $('#groupList');
   gl.innerHTML = data.groups.map(g => {
     const n = data.people.filter(p => p.groupId === g.id).length;
-    return `<li data-id="${g.id}"><span class="dot" style="background:${g.color}"></span><span class="grow">${esc(g.name)} <small>${n}명</small></span>
-      <button class="edit">이름 변경</button><button class="del">삭제</button></li>`;
+    const leaderLine = cloudOn()
+      ? `<div class="leader-line">${g.leaderName
+          ? `팀장 <b>${esc(g.leaderName)}</b> · 코드 <code>${Cloud.fmtCode(g.leaderCode)}</code>
+             <button class="share">초대 보내기</button><button class="setLeader">변경</button><button class="clearLeader">해제</button>`
+          : `팀장 없음 <button class="setLeader">팀장 지정</button>`}</div>`
+      : '';
+    return `<li data-id="${g.id}" class="group-item"><div class="group-row"><span class="dot" style="background:${g.color}"></span><span class="grow">${esc(g.name)} <small>${n}명</small></span>
+      <button class="edit">이름 변경</button><button class="del">삭제</button></div>${leaderLine}</li>`;
   }).join('') || '<li class="muted">그룹이 없습니다. 예: 1반, 2반, 오전반</li>';
   gl.querySelectorAll('li[data-id]').forEach(li => {
     const g = groupById(li.dataset.id);
-    li.querySelector('.edit').onclick = () => openEdit('그룹 이름 변경', g.name, null, (name) => { g.name = name; });
+    li.querySelector('.edit').onclick = () => openEdit('그룹 이름 변경', g.name, null, name => {
+      if (cloudOn()) return Cloud.renameGroup(g.id, name);
+      g.name = name;
+    });
     li.querySelector('.del').onclick = () => {
-      if (!confirm(`'${g.name}' 그룹을 삭제할까요?\n소속된 사람은 '그룹 없음'으로 옮겨집니다.`)) return;
+      if (!confirm(`'${g.name}' 그룹을 삭제할까요?\n소속된 사람은 '그룹 없음'으로 옮겨집니다.${g.leaderName ? '\n팀장 연결도 끊어집니다.' : ''}`)) return;
+      if (cloudOn()) return Cloud.deleteGroup(g.id);
       data.people.forEach(p => { if (p.groupId === g.id) p.groupId = ''; });
       data.groups = data.groups.filter(x => x !== g);
       save(); renderManage();
     };
+    li.querySelector('.setLeader')?.addEventListener('click', () => setLeaderFlow(g));
+    li.querySelector('.share')?.addEventListener('click', () => shareInvite(g));
+    li.querySelector('.clearLeader')?.addEventListener('click', async () => {
+      if (!confirm(`${g.leaderName} 팀장을 해제할까요?\n그 팀장은 더 이상 앱에서 이 그룹을 볼 수 없습니다.`)) return;
+      try { await Cloud.clearLeader(g.id); toast('팀장을 해제했습니다'); } catch (e) { console.error(e); toast('해제하지 못했습니다'); }
+    });
   });
 
-  const opts = '<option value="">그룹 없음</option>' + data.groups.map(g => `<option value="${g.id}">${esc(g.name)}</option>`).join('');
   const sel = $('#personGroup');
+  sel.hidden = leader;
+  const opts = (leader ? '' : '<option value="">그룹 없음</option>') + data.groups.map(g => `<option value="${g.id}">${esc(g.name)}</option>`).join('');
   const keep = sel.value;
   sel.innerHTML = opts;
   if ([...sel.options].some(o => o.value === keep)) sel.value = keep;
@@ -553,14 +630,110 @@ function renderManage() {
       <button class="edit">수정</button><button class="del">삭제</button></li>`).join('') || '<li class="muted">사람이 없습니다</li>';
   pl.querySelectorAll('li[data-id]').forEach(li => {
     const p = data.people.find(x => x.id === li.dataset.id);
-    li.querySelector('.edit').onclick = () => openEdit('사람 수정', p.name, p.groupId, (name, gid) => { p.name = name; p.groupId = gid; });
+    li.querySelector('.edit').onclick = () => openEdit('사람 수정', p.name, leader ? null : p.groupId, (name, gid) => {
+      if (cloudOn()) return Cloud.updatePerson(p.id, name, leader ? p.groupId : gid);
+      p.name = name; p.groupId = gid;
+    });
     li.querySelector('.del').onclick = () => {
       if (!confirm(`'${p.name}'님을 삭제할까요?\n이 사람의 출결 기록도 함께 지워집니다.`)) return;
+      if (cloudOn()) return Cloud.deletePerson(p);
       data.people = data.people.filter(x => x !== p);
       for (const [d, rec] of Object.entries(data.records)) { delete rec[p.id]; if (!Object.keys(rec).length) delete data.records[d]; }
       save(); renderManage();
     };
   });
+
+  $('#localDataActions').hidden = cloudOn();
+  $('#dataNote').textContent = cloudOn()
+    ? '기록은 온라인에 저장되어 관리자와 팀장이 함께 봅니다. 필요하면 백업 파일로도 저장할 수 있어요.'
+    : '기록은 이 폰 안에만 저장됩니다. 폰을 바꾸거나 앱을 지우기 전에 백업해 두세요.';
+  $('#dataCard').hidden = leader;
+}
+
+function renderConnect() {
+  const box = $('#connectCard');
+  if (!Cloud.available()) { box.hidden = true; return; }
+  box.hidden = false;
+  if (!cloudOn()) {
+    box.innerHTML = `<h3>팀장과 함께 쓰기</h3>
+      <p class="muted">모임을 만들면 그룹마다 팀장을 정하고, 팀장이 자기 폰에서 출석을 체크할 수 있어요. 공지사항도 보낼 수 있어요.</p>
+      <div class="row-actions">
+        <button class="btn small" id="createOrgBtn">새 모임 만들기 (관리자)</button>
+        <button class="btn small ghost" id="joinBtn">초대 코드 입력 (팀장)</button>
+      </div>`;
+    $('#createOrgBtn').onclick = createOrgFlow;
+    $('#joinBtn').onclick = () => joinFlow();
+    return;
+  }
+  const st = Cloud.state;
+  const admin = Cloud.isAdmin();
+  const myGroup = !admin ? data.groups[0] : null;
+  box.innerHTML = `<h3>${esc(st.orgName || '모임')} <small class="role-badge">${admin ? '관리자' : '팀장'}</small></h3>
+    <p class="muted">${admin ? '모든 그룹을 관리하고 공지를 올릴 수 있어요.' : `<b>${esc(myGroup?.name || '')}</b> 그룹 출석을 체크하고 공지를 볼 수 있어요.`}</p>
+    <div class="row-actions">
+      ${admin ? '<button class="btn small ghost" id="adminCodeBtn">다른 폰에서 관리자로 쓰기</button>' : ''}
+      <button class="btn small danger" id="leaveBtn">연결 해제</button>
+    </div>`;
+  $('#adminCodeBtn')?.addEventListener('click', () => {
+    alert(`관리자 코드: ${Cloud.fmtCode(st.adminCode)}\n\n다른 폰에서 앱을 열고 '초대 코드 입력'에 이 코드를 넣으면 관리자로 연결됩니다.\n이 코드는 다른 사람에게 알려주지 마세요.`);
+  });
+  $('#leaveBtn').onclick = () => {
+    if (!confirm(admin ? '이 폰에서 모임 연결을 해제할까요?\n온라인 기록은 지워지지 않고, 관리자 코드로 다시 연결할 수 있어요.' : '이 폰에서 연결을 해제할까요?\n다시 쓰려면 초대 코드를 다시 넣어야 해요.')) return;
+    Cloud.leave();
+    data = load();
+    toast('연결을 해제했습니다');
+    showTab('manage');
+  };
+}
+
+async function createOrgFlow() {
+  const name = prompt('모임 이름을 입력하세요 (예: ○○교회 청년부)');
+  if (!name?.trim()) return;
+  const hasLocal = data.people.length > 0;
+  const upload = hasLocal && confirm(`이 폰에 있는 그룹 ${data.groups.length}개, 사람 ${data.people.length}명과 출결 기록을 새 모임으로 옮길까요?`);
+  try {
+    toast('모임을 만드는 중...');
+    await Cloud.createOrg(name.trim(), upload ? load() : null);
+    await startCloud();
+    toast('모임을 만들었습니다. 그룹마다 팀장을 지정해 보세요');
+    showTab('manage');
+  } catch (e) { console.error(e); toast('모임을 만들지 못했습니다. 인터넷 연결을 확인하세요'); }
+}
+
+async function joinFlow(prefill) {
+  const code = prefill || prompt('받은 초대 코드 8자리를 입력하세요');
+  if (!code) return;
+  try {
+    toast('연결하는 중...');
+    await Cloud.join(code);
+    await startCloud();
+    toast(Cloud.isAdmin() ? '관리자로 연결되었습니다' : '팀장으로 연결되었습니다');
+    showTab(Cloud.isAdmin() ? 'manage' : 'check');
+  } catch (e) { console.error(e); toast(e.message && !e.code ? e.message : '연결하지 못했습니다. 코드를 확인하세요'); }
+}
+
+async function setLeaderFlow(g) {
+  const name = prompt(`${g.name} 그룹의 팀장 이름을 입력하세요`, g.leaderName || '');
+  if (!name?.trim()) return;
+  if (g.leaderName && !confirm('팀장을 바꾸면 새 초대 코드가 만들어지고, 이전 코드와 이전 팀장의 연결은 끊어집니다. 계속할까요?')) return;
+  try {
+    const code = await Cloud.setLeader(g.id, name.trim());
+    shareInvite({ ...g, leaderName: name.trim(), leaderCode: code });
+  } catch (e) { console.error(e); toast('팀장을 지정하지 못했습니다'); }
+}
+
+async function shareInvite(g) {
+  const code = Cloud.fmtCode(g.leaderCode);
+  const msg = `[출결 관리] ${Cloud.state.orgName} ${g.name} 팀장 초대\n${g.leaderName}님, 아래 순서로 연결해 주세요.\n\n` +
+    `1) 앱 설치\n- 안드로이드: ${APK_URL}\n- 아이폰: Safari로 ${WEB_URL}?code=${g.leaderCode} 열고 공유 → 홈 화면에 추가\n\n` +
+    `2) 앱 → 관리 → '초대 코드 입력'에 코드 입력\n코드: ${code}`;
+  const cap = window.Capacitor;
+  try {
+    if (cap?.isNativePlatform?.()) return await cap.Plugins.Share.share({ text: msg, dialogTitle: '초대 보내기' });
+    if (navigator.share) return await navigator.share({ text: msg });
+  } catch (e) { if (e?.name === 'AbortError' || String(e?.message).toLowerCase().includes('cancel')) return; }
+  try { await navigator.clipboard.writeText(msg); toast('초대 메시지를 복사했습니다. 카톡에 붙여 넣으세요'); }
+  catch { alert(msg); }
 }
 
 function openEdit(title, name, groupId, onSave) {
@@ -626,6 +799,23 @@ function loadSample() {
   renderManage();
 }
 
+// ---------- 온라인 연결 ----------
+let renderQueued = false;
+function cloudChanged() {
+  data = { groups: Cloud.state.groups, people: Cloud.state.people, records: Cloud.records() };
+  if (renderQueued) return;
+  renderQueued = true;
+  requestAnimationFrame(() => { renderQueued = false; render(); });
+}
+async function startCloud() {
+  const ok = await Cloud.start({
+    onChange: cloudChanged,
+    onLeave: msg => { data = load(); toast(msg); showTab('manage'); },
+  });
+  if (ok) cloudChanged();
+  return ok;
+}
+
 // ---------- 이벤트 연결 ----------
 function init() {
   $$('.tabbar button').forEach(b => b.onclick = () => showTab(b.dataset.tab));
@@ -636,15 +826,23 @@ function init() {
   $('#allPresent').onclick = () => {
     const people = peopleIn(ui.checkGroup);
     if (!people.length) return;
-    const day = data.records[ui.checkDate] || (data.records[ui.checkDate] = {});
-    people.forEach(p => { if (!day[p.id]) day[p.id] = 'P'; });
-    save(); renderCheck(); toast('미입력자를 모두 출석 처리했습니다');
+    const day = data.records[ui.checkDate] || {};
+    const todo = people.filter(p => !day[p.id]);
+    if (cloudOn()) Cloud.setMarks(ui.checkDate, todo.map(person => ({ person, status: 'P' })));
+    else {
+      data.records[ui.checkDate] = day;
+      todo.forEach(p => { day[p.id] = 'P'; });
+      save(); renderCheck();
+    }
+    toast('미입력자를 모두 출석 처리했습니다');
   };
   $('#clearDay').onclick = () => {
     const day = data.records[ui.checkDate];
     if (!day) return;
     if (!confirm('이 날짜의 (현재 보이는 그룹) 기록을 지울까요?')) return;
-    peopleIn(ui.checkGroup).forEach(p => delete day[p.id]);
+    const people = peopleIn(ui.checkGroup).filter(p => day[p.id]);
+    if (cloudOn()) return Cloud.setMarks(ui.checkDate, people.map(person => ({ person, status: null })));
+    people.forEach(p => delete day[p.id]);
     if (!Object.keys(day).length) delete data.records[ui.checkDate];
     save(); renderCheck();
   };
@@ -657,13 +855,24 @@ function init() {
   };
   $('#shareStatsImg').onclick = () => shareImage(statsImage(), `출결통계_${ui.from}_${ui.to}.png`);
 
+  $('#noticeForm').onsubmit = e => {
+    e.preventDefault();
+    const title = $('#noticeTitle').value.trim(), body = $('#noticeBody').value.trim();
+    if (!title) return;
+    Cloud.addNotice(title, body, $('#noticeGroup').value);
+    $('#noticeTitle').value = ''; $('#noticeBody').value = '';
+    toast('공지를 올렸습니다');
+  };
+
   $('#groupForm').onsubmit = e => {
     e.preventDefault();
     const name = $('#groupName').value.trim();
     if (!name) return;
-    const g = { id: uid(), name, color: GROUP_COLORS[data.groups.length % GROUP_COLORS.length] };
-    data.groups.push(g);
+    const color = GROUP_COLORS[data.groups.length % GROUP_COLORS.length];
     $('#groupName').value = '';
+    if (cloudOn()) return Cloud.addGroup(name, color);
+    const g = { id: uid(), name, color };
+    data.groups.push(g);
     save(); renderManage();
     $('#personGroup').value = g.id;
   };
@@ -671,10 +880,13 @@ function init() {
     e.preventDefault();
     const name = $('#personName').value.trim();
     if (!name) return;
-    data.people.push({ id: uid(), name, groupId: $('#personGroup').value });
+    const groupId = cloudOn() && !Cloud.isAdmin() ? Cloud.session.groupId : $('#personGroup').value;
     $('#personName').value = '';
     $('#personName').focus();
-    save(); renderManage(); toast(`${name} 추가됨`);
+    toast(`${name} 추가됨`);
+    if (cloudOn()) return Cloud.addPerson(name, groupId);
+    data.people.push({ id: uid(), name, groupId });
+    save(); renderManage();
   };
 
   $('#backupBtn').onclick = () => saveFile(`출결백업_${today()}.json`, JSON.stringify(data), 'application/json');
@@ -707,7 +919,11 @@ function init() {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }
 
-  showTab(data.people.length ? 'check' : 'manage');
+  const codeParam = new URLSearchParams(location.search).get('code');
+  const connected = Cloud.loadSession();
+  showTab(connected || data.people.length ? 'check' : 'manage');
+  if (connected) startCloud().catch(e => { console.error(e); toast('온라인 연결에 실패했습니다'); });
+  else if (codeParam && Cloud.available()) joinFlow(codeParam);
 }
 
 init();

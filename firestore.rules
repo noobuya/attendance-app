@@ -1,0 +1,78 @@
+rules_version = '2';
+
+// 출결 관리 앱 보안 규칙
+// - 관리자: 모임 전체를 읽고 씀
+// - 팀장: 자기 그룹의 사람과 출결만 읽고 씀, 공지는 읽기만
+// - 초대 코드를 아는 사람만 모임에 들어올 수 있음
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function memberPath(org) { return /databases/$(database)/documents/orgs/$(org)/members/$(request.auth.uid); }
+    function isMember(org) { return signedIn() && exists(memberPath(org)); }
+    function me(org) { return get(memberPath(org)).data; }
+    function isAdmin(org) { return isMember(org) && me(org).role == 'admin'; }
+    function isLeaderOf(org, gid) {
+      return isMember(org) && me(org).role == 'leader' && me(org).groupId == gid;
+    }
+
+    match /invites/{code} {
+      // 코드를 정확히 아는 경우에만 한 건 읽기 (목록 보기 불가)
+      allow get: if signedIn();
+      allow list: if false;
+      allow create: if isAdmin(request.resource.data.orgId);
+      allow delete: if isAdmin(resource.data.orgId);
+      allow update: if false;
+    }
+
+    match /orgs/{org} {
+      allow get: if isMember(org);
+      allow list: if false;
+      allow create: if signedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow update: if isAdmin(org)
+        && request.resource.data.ownerUid == resource.data.ownerUid;
+      allow delete: if false;
+
+      match /members/{uid} {
+        function validInvite() {
+          let inv = get(/databases/$(database)/documents/invites/$(request.resource.data.code)).data;
+          return inv.orgId == org
+            && inv.role == request.resource.data.role
+            && inv.get('groupId', null) == request.resource.data.get('groupId', null);
+        }
+        function ownerJoining() {
+          return request.resource.data.role == 'admin'
+            && get(/databases/$(database)/documents/orgs/$(org)).data.ownerUid == request.auth.uid;
+        }
+        allow get: if signedIn() && (uid == request.auth.uid || isAdmin(org));
+        allow list: if isAdmin(org);
+        allow create, update: if signedIn() && uid == request.auth.uid
+          && (ownerJoining() || validInvite());
+        allow delete: if isAdmin(org) || (signedIn() && uid == request.auth.uid);
+      }
+
+      match /groups/{gid} {
+        allow read: if isAdmin(org) || isLeaderOf(org, gid);
+        allow write: if isAdmin(org);
+
+        match /days/{date} {
+          allow read, write: if isAdmin(org) || isLeaderOf(org, gid);
+        }
+      }
+
+      match /people/{pid} {
+        allow read: if isAdmin(org)
+          || (isMember(org) && resource.data.groupId == me(org).groupId);
+        allow create: if isAdmin(org) || isLeaderOf(org, request.resource.data.groupId);
+        allow update: if isAdmin(org)
+          || (isLeaderOf(org, resource.data.groupId) && isLeaderOf(org, request.resource.data.groupId));
+        allow delete: if isAdmin(org) || isLeaderOf(org, resource.data.groupId);
+      }
+
+      match /notices/{nid} {
+        allow read: if isMember(org);
+        allow write: if isAdmin(org);
+      }
+    }
+  }
+}
